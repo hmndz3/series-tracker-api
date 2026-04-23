@@ -78,6 +78,10 @@ func main() {
 
 	// Endpoints de series
 	r.Get("/series", manejadores.ListarSeries)
+	r.Get("/series/{id}", manejadores.ObtenerSerie)
+	r.Post("/series", manejadores.CrearSerie)
+	r.Put("/series/{id}", manejadores.ActualizarSerie)
+	r.Delete("/series/{id}", manejadores.EliminarSerie)
 
 	addr := fmt.Sprintf(":%s", port)
 	log.Printf("Servidor arrancando en %s", addr)
