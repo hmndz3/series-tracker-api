@@ -3,6 +3,7 @@ package manejadores
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
@@ -15,20 +16,97 @@ import (
 )
 
 // ListarSeries responde GET /series con la lista de todas las series.
+// --------------------------------------------------------------------
+// GET /series — Listar series con paginación, búsqueda y ordenamiento
+//
+// Query parameters (todos opcionales):
+//   ?q=texto           Búsqueda por título (case-insensitive, coincidencia parcial)
+//   ?sort=campo        Ordenar por: titulo, calificacion, creado_en (default: creado_en)
+//   ?order=asc|desc    Dirección del ordenamiento (default: desc)
+//   ?page=N            Número de página, empezando en 1 (default: 1)
+//   ?limit=N           Resultados por página, máximo 100 (default: 10)
+//
+// Respuesta: { "datos": [...], "paginacion": { "pagina": 1, "limite": 10, "total": 42, "total_paginas": 5 } }
+// --------------------------------------------------------------------
+
+// Campos permitidos para ordenamiento. Esto evita SQL injection en el parámetro sort.
+var camposOrdenValidos = map[string]bool{
+	"titulo":       true,
+	"calificacion": true,
+	"creado_en":    true,
+}
+
 func ListarSeries(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	query := r.URL.Query()
 
-	// Query SQL: selecciona todas las columnas de todas las series,
-	// ordenadas por fecha de creación descendente (las más nuevas primero).
-	consulta := `
+	// ---- Parsear parámetros ----
+
+	busqueda := strings.TrimSpace(query.Get("q"))
+
+	campoOrden := query.Get("sort")
+	if campoOrden == "" || !camposOrdenValidos[campoOrden] {
+		campoOrden = "creado_en"
+	}
+
+	direccion := strings.ToLower(query.Get("order"))
+	if direccion != "asc" && direccion != "desc" {
+		direccion = "desc"
+	}
+
+	pagina, _ := strconv.Atoi(query.Get("page"))
+	if pagina < 1 {
+		pagina = 1
+	}
+
+	limite, _ := strconv.Atoi(query.Get("limit"))
+	if limite < 1 {
+		limite = 10
+	}
+	if limite > 100 {
+		limite = 100
+	}
+
+	offset := (pagina - 1) * limite
+
+	// ---- Construir la query dinámicamente ----
+
+	// WHERE clause para la búsqueda (si aplica)
+	whereClause := ""
+	argumentos := []interface{}{}
+	if busqueda != "" {
+		whereClause = "WHERE LOWER(titulo) LIKE $1"
+		argumentos = append(argumentos, "%"+strings.ToLower(busqueda)+"%")
+	}
+
+	// ---- Contar total (para metadata de paginación) ----
+
+	var total int
+	consultaCount := "SELECT COUNT(*) FROM series " + whereClause
+	if err := db.Pool.QueryRow(ctx, consultaCount, argumentos...).Scan(&total); err != nil {
+		log.Printf("Error al contar series: %v", err)
+		responderError(w, http.StatusInternalServerError, "Error al obtener las series")
+		return
+	}
+
+	// ---- Consulta principal con paginación ----
+
+	// Usamos fmt.Sprintf para inyectar el campo de orden porque los drivers de Go no
+	// permiten parametrizar nombres de columna/dirección. Como validamos contra la lista
+	// camposOrdenValidos y direccion solo puede ser "asc" o "desc", no hay riesgo de SQL injection.
+	consulta := fmt.Sprintf(`
 		SELECT id, titulo, descripcion, imagen_url, estado,
 		       calificacion, episodios_total, episodios_vistos,
 		       creado_en, actualizado_en
 		FROM series
-		ORDER BY creado_en DESC
-	`
+		%s
+		ORDER BY %s %s
+		LIMIT $%d OFFSET $%d
+	`, whereClause, campoOrden, direccion, len(argumentos)+1, len(argumentos)+2)
 
-	filas, err := db.Pool.Query(ctx, consulta)
+	argumentos = append(argumentos, limite, offset)
+
+	filas, err := db.Pool.Query(ctx, consulta, argumentos...)
 	if err != nil {
 		log.Printf("Error al consultar series: %v", err)
 		responderError(w, http.StatusInternalServerError, "Error al obtener las series")
@@ -36,21 +114,13 @@ func ListarSeries(w http.ResponseWriter, r *http.Request) {
 	}
 	defer filas.Close()
 
-	// Convertir cada fila a un struct Serie
 	series := make([]modelos.Serie, 0)
 	for filas.Next() {
 		var s modelos.Serie
 		err := filas.Scan(
-			&s.ID,
-			&s.Titulo,
-			&s.Descripcion,
-			&s.ImagenURL,
-			&s.Estado,
-			&s.Calificacion,
-			&s.EpisodiosTotal,
-			&s.EpisodiosVistos,
-			&s.CreadoEn,
-			&s.ActualizadoEn,
+			&s.ID, &s.Titulo, &s.Descripcion, &s.ImagenURL, &s.Estado,
+			&s.Calificacion, &s.EpisodiosTotal, &s.EpisodiosVistos,
+			&s.CreadoEn, &s.ActualizadoEn,
 		)
 		if err != nil {
 			log.Printf("Error al leer fila: %v", err)
@@ -60,13 +130,21 @@ func ListarSeries(w http.ResponseWriter, r *http.Request) {
 		series = append(series, s)
 	}
 
-	if err := filas.Err(); err != nil {
-		log.Printf("Error al iterar filas: %v", err)
-		responderError(w, http.StatusInternalServerError, "Error al procesar los datos")
-		return
+	// ---- Respuesta con metadata de paginación ----
+
+	totalPaginas := (total + limite - 1) / limite // redondeo hacia arriba
+
+	respuesta := map[string]interface{}{
+		"datos": series,
+		"paginacion": map[string]interface{}{
+			"pagina":        pagina,
+			"limite":        limite,
+			"total":         total,
+			"total_paginas": totalPaginas,
+		},
 	}
 
-	responderJSON(w, http.StatusOK, series)
+	responderJSON(w, http.StatusOK, respuesta)
 }
 
 // responderJSON es un helper para enviar respuestas JSON con el status correcto.
