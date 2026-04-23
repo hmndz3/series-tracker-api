@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 	"github.com/hmndz3/series-tracker-api/internal/db"
+	"github.com/hmndz3/series-tracker-api/internal/manejadores"
 )
 
 func main() {
@@ -74,6 +75,9 @@ func main() {
 			"base_de_datos": "conectada",
 		})
 	})
+
+	// Endpoints de series
+	r.Get("/series", manejadores.ListarSeries)
 
 	addr := fmt.Sprintf(":%s", port)
 	log.Printf("Servidor arrancando en %s", addr)
