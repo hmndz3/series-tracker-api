@@ -15,20 +15,6 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// ListarSeries responde GET /series con la lista de todas las series.
-// --------------------------------------------------------------------
-// GET /series — Listar series con paginación, búsqueda y ordenamiento
-//
-// Query parameters (todos opcionales):
-//   ?q=texto           Búsqueda por título (case-insensitive, coincidencia parcial)
-//   ?sort=campo        Ordenar por: titulo, calificacion, creado_en (default: creado_en)
-//   ?order=asc|desc    Dirección del ordenamiento (default: desc)
-//   ?page=N            Número de página, empezando en 1 (default: 1)
-//   ?limit=N           Resultados por página, máximo 100 (default: 10)
-//
-// Respuesta: { "datos": [...], "paginacion": { "pagina": 1, "limite": 10, "total": 42, "total_paginas": 5 } }
-// --------------------------------------------------------------------
-
 // Campos permitidos para ordenamiento. Esto evita SQL injection en el parámetro sort.
 var camposOrdenValidos = map[string]bool{
 	"titulo":       true,
@@ -69,9 +55,7 @@ func ListarSeries(w http.ResponseWriter, r *http.Request) {
 
 	offset := (pagina - 1) * limite
 
-	// ---- Construir la query dinámicamente ----
 
-	// WHERE clause para la búsqueda (si aplica)
 	whereClause := ""
 	argumentos := []interface{}{}
 	if busqueda != "" {
@@ -89,11 +73,6 @@ func ListarSeries(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// ---- Consulta principal con paginación ----
-
-	// Usamos fmt.Sprintf para inyectar el campo de orden porque los drivers de Go no
-	// permiten parametrizar nombres de columna/dirección. Como validamos contra la lista
-	// camposOrdenValidos y direccion solo puede ser "asc" o "desc", no hay riesgo de SQL injection.
 	consulta := fmt.Sprintf(`
 		SELECT id, titulo, descripcion, imagen_url, estado,
 		       calificacion, episodios_total, episodios_vistos,
@@ -163,10 +142,6 @@ func responderError(w http.ResponseWriter, status int, mensaje string) {
 	})
 }
 
-// --------------------------------------------------------------------
-// GET /series/{id} — Obtener una serie específica por ID
-// --------------------------------------------------------------------
-
 func ObtenerSerie(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -205,23 +180,12 @@ func ObtenerSerie(w http.ResponseWriter, r *http.Request) {
 	responderJSON(w, http.StatusOK, s)
 }
 
-// --------------------------------------------------------------------
-// Helpers compartidos
-// --------------------------------------------------------------------
 
 // obtenerIDDeURL extrae el parámetro {id} de la URL y lo convierte a int.
 func obtenerIDDeURL(r *http.Request) (int, error) {
 	idStr := chi.URLParam(r, "id")
 	return strconv.Atoi(idStr)
 }
-
-// --------------------------------------------------------------------
-// EntradaSerie — struct para recibir datos en POST y PUT
-// --------------------------------------------------------------------
-
-// EntradaSerie representa el cuerpo (JSON) de las peticiones POST y PUT.
-// Todos los campos son punteros para distinguir "no enviado" de "valor vacío".
-// Esto es crucial para PUT, donde solo queremos actualizar los campos enviados.
 type EntradaSerie struct {
 	Titulo          *string `json:"titulo"`
 	Descripcion     *string `json:"descripcion"`
@@ -232,8 +196,7 @@ type EntradaSerie struct {
 	EpisodiosVistos *int    `json:"episodios_vistos"`
 }
 
-// validarCampos verifica las reglas de negocio para los campos enviados.
-// Retorna string vacío si todo está bien, o un mensaje de error descriptivo.
+
 func validarCampos(e *EntradaSerie) string {
 	if e.Estado != nil && !modelos.EstadosValidos[*e.Estado] {
 		return "Estado inválido. Valores permitidos: viendo, completada, pendiente, abandonada"
@@ -253,9 +216,6 @@ func validarCampos(e *EntradaSerie) string {
 	return ""
 }
 
-// --------------------------------------------------------------------
-// POST /series — Crear una nueva serie
-// --------------------------------------------------------------------
 
 func CrearSerie(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -322,9 +282,6 @@ func CrearSerie(w http.ResponseWriter, r *http.Request) {
 	responderJSON(w, http.StatusCreated, s)
 }
 
-// --------------------------------------------------------------------
-// PUT /series/{id} — Actualizar una serie existente
-// --------------------------------------------------------------------
 
 func ActualizarSerie(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -346,8 +303,7 @@ func ActualizarSerie(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// COALESCE en SQL: si el valor enviado es NULL, mantiene el valor actual.
-	// Así PUT actualiza solo los campos enviados (update parcial).
+
 	consulta := `
 		UPDATE series
 		SET titulo           = COALESCE($1, titulo),
@@ -393,9 +349,6 @@ func ActualizarSerie(w http.ResponseWriter, r *http.Request) {
 	responderJSON(w, http.StatusOK, s)
 }
 
-// --------------------------------------------------------------------
-// DELETE /series/{id} — Eliminar una serie
-// --------------------------------------------------------------------
 
 func EliminarSerie(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -418,7 +371,6 @@ func EliminarSerie(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 204 No Content: eliminación exitosa, sin cuerpo de respuesta.
-	// Es el status estándar REST para DELETE exitoso.
+
 	w.WriteHeader(http.StatusNoContent)
 }
